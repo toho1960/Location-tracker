@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Location Tracker</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'DM Sans', sans-serif; height: 100vh; display: flex; flex-direction: column; background: #f7f6f3; color: #1a1a1a; }
+
+  #topbar {
+    padding: 10px 16px;
+    display: flex; align-items: center; gap: 10px;
+    background: #fff; border-bottom: 1px solid #e4e1d9;
+    flex-wrap: wrap; z-index: 100;
+  }
+  #topbar h1 { font-size: 14px; font-weight: 500; color: #1a1a1a; white-space: nowrap; letter-spacing: 0.01em; }
+  .dot-live { width: 7px; height: 7px; border-radius: 50%; background: #1D9E75; display: inline-block; margin-right: 2px; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.35} }
+
+  .tbtn {
+    font-size: 12px; padding: 5px 12px; border-radius: 6px;
+    border: 1px solid #ddd8ce; background: #fff;
+    color: #555; cursor: pointer; transition: all 0.15s;
+    font-family: 'DM Sans', sans-serif; white-space: nowrap;
+  }
+  .tbtn:hover { background: #f7f6f3; color: #1a1a1a; }
+  .tbtn.active { background: #185FA5; color: #fff; border-color: #185FA5; }
+  .tbtn.green { background: #1D9E75; color: #fff; border-color: #1D9E75; }
+  .tbtn.green:hover { background: #0F6E56; }
+  #stats { font-size: 11px; color: #aaa; margin-left: auto; font-family: 'DM Mono', monospace; white-space: nowrap; }
+
+  /* export/import group */
+  .io-group { display: flex; gap: 6px; align-items: center; margin-left: 4px; padding-left: 10px; border-left: 1px solid #e4e1d9; }
+  .io-group label.tbtn { cursor: pointer; }
+
+  #map { flex: 1; }
+
+  #hint {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    background: rgba(24,95,165,0.93); color: #fff;
+    padding: 9px 20px; border-radius: 20px; font-size: 13px;
+    pointer-events: none; z-index: 600; white-space: nowrap; display: none;
+  }
+
+  /* PANEL */
+  #panel {
+    position: fixed; right: -360px; top: 0; height: 100%;
+    width: 340px; background: #fff;
+    border-left: 1px solid #e4e1d9;
+    padding: 22px 20px 20px;
+    overflow-y: auto; z-index: 1000;
+    display: flex; flex-direction: column; gap: 14px;
+    transition: right 0.25s ease;
+    box-shadow: -6px 0 28px rgba(0,0,0,0.08);
+  }
+  #panel.open { right: 0; }
+
+  .panel-title { font-size: 15px; font-weight: 500; color: #1a1a1a; }
+
+  .field { display: flex; flex-direction: column; gap: 5px; }
+  .field label { font-size: 11px; color: #999; letter-spacing: 0.05em; text-transform: uppercase; }
+  .field input, .field textarea {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px; padding: 8px 11px;
+    border-radius: 7px; border: 1px solid #ddd8ce;
+    background: #faf9f7; color: #1a1a1a; outline: none;
+    transition: border-color 0.15s;
+  }
+  .field input:focus, .field textarea:focus { border-color: #185FA5; background: #fff; }
+  .field textarea { resize: vertical; min-height: 55px; }
+
+  #search-results {
+    display: none; flex-direction: column;
+    background: #fff; border: 1px solid #ddd8ce;
+    border-radius: 7px; overflow: hidden;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+  }
+  #search-results.visible { display: flex; }
+  .search-result-item {
+    padding: 9px 12px; font-size: 12px; color: #444;
+    cursor: pointer; border-bottom: 1px solid #f0ede6;
+    transition: background 0.1s; line-height: 1.4;
+  }
+  .search-result-item:last-child { border-bottom: none; }
+  .search-result-item:hover { background: #f7f6f3; color: #1a1a1a; }
+
+  .mode-tabs { display: flex; gap: 6px; }
+  .mode-tab {
+    flex: 1; padding: 7px; text-align: center; font-size: 12px;
+    border-radius: 6px; border: 1px solid #ddd8ce;
+    background: #faf9f7; color: #888; cursor: pointer; transition: all 0.15s;
+  }
+  .mode-tab.active { background: #185FA5; color: #fff; border-color: #185FA5; }
+
+  .info-row { display: flex; gap: 8px; }
+  .info-chip {
+    flex: 1; background: #f7f6f3; border: 1px solid #e4e1d9;
+    border-radius: 7px; padding: 8px 10px;
+  }
+  .info-chip .chip-label { font-size: 10px; color: #aaa; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 3px; }
+  .info-chip .chip-val { font-size: 13px; color: #1a1a1a; font-family: 'DM Mono', monospace; }
+  .temp-loading { font-size: 12px; color: #bbb; font-style: italic; font-family: 'DM Sans', sans-serif; }
+
+  .btn-row { display: flex; gap: 8px; margin-top: 4px; }
+  .btn-save {
+    flex: 1; padding: 9px; background: #185FA5; color: #fff;
+    border: none; border-radius: 7px; font-size: 13px;
+    font-family: 'DM Sans', sans-serif; cursor: pointer; transition: background 0.15s;
+  }
+  .btn-save:hover { background: #0C447C; }
+  .btn-search {
+    padding: 9px 14px; background: #1D9E75; color: #fff;
+    border: none; border-radius: 7px; font-size: 13px;
+    font-family: 'DM Sans', sans-serif; cursor: pointer; transition: background 0.15s;
+  }
+  .btn-search:hover { background: #0F6E56; }
+  .btn-del {
+    padding: 9px 14px; background: #faf9f7;
+    border: 1px solid #ddd8ce; border-radius: 7px;
+    font-size: 13px; font-family: 'DM Sans', sans-serif;
+    color: #aaa; cursor: pointer; transition: all 0.15s;
+  }
+  .btn-del:hover { color: #A32D2D; border-color: #E24B4A; }
+  .btn-close {
+    position: absolute; top: 16px; right: 16px;
+    background: none; border: none; font-size: 18px;
+    cursor: pointer; color: #ccc; line-height: 1;
+  }
+  .btn-close:hover { color: #888; }
+  .divider { border: none; border-top: 1px solid #ede9e1; }
+
+  /* LIST */
+  #list-panel {
+    position: fixed; left: -360px; top: 0; height: 100%;
+    width: 340px; background: #fff;
+    border-right: 1px solid #e4e1d9;
+    padding: 20px 18px; overflow-y: auto; z-index: 1000;
+    display: flex; flex-direction: column; gap: 10px;
+    transition: left 0.25s ease;
+    box-shadow: 6px 0 28px rgba(0,0,0,0.07);
+  }
+  #list-panel.open { left: 0; }
+  .list-item {
+    background: #faf9f7; border: 1px solid #e4e1d9;
+    border-radius: 8px; padding: 10px 12px; cursor: pointer;
+    transition: border-color 0.15s;
+  }
+  .list-item:hover { border-color: #185FA5; background: #fff; }
+  .list-item-name { font-size: 13px; font-weight: 500; color: #1a1a1a; margin-bottom: 3px; }
+  .list-item-meta { font-size: 11px; color: #aaa; font-family: 'DM Mono', monospace; }
+  .list-item-addr { font-size: 11px; color: #bbb; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .list-close {
+    background: none; border: none; font-size: 18px;
+    cursor: pointer; color: #ccc; position: absolute; top: 16px; right: 16px;
+  }
+  .list-close:hover { color: #888; }
+  .list-title { font-size: 15px; font-weight: 500; color: #1a1a1a; }
+
+  /* Toast */
+  #toast {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    background: #1D9E75; color: #fff;
+    padding: 9px 20px; border-radius: 20px; font-size: 13px;
+    pointer-events: none; z-index: 700; white-space: nowrap;
+    opacity: 0; transition: opacity 0.3s;
+  }
+  #toast.show { opacity: 1; }
+
+  /* Visit toggle */
+  .visit-toggle {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px; border-radius: 7px;
+    border: 1px solid #ddd8ce; cursor: pointer; user-select: none;
+    transition: all 0.15s;
+  }
+  .visit-toggle:hover { border-color: #E24B4A; }
+  .visit-toggle.on { background: #FCEBEB; border-color: #E24B4A; }
+  .visit-dot { width: 12px; height: 12px; border-radius: 50%; background: #ddd; transition: background 0.15s; flex-shrink: 0; }
+  .visit-toggle.on .visit-dot { background: #E24B4A; }
+  .visit-label { font-size: 13px; color: #555; }
+  .visit-toggle.on .visit-label { color: #A32D2D; font-weight: 500; }
+  .list-item.want-visit { border-left: 3px solid #E24B4A; }
+
+  /* Tooltip */
+  .leaflet-tooltip {
+    background: #fff !important;
+    border: 1px solid #e4e1d9 !important;
+    color: #1a1a1a !important;
+    font-family: 'DM Sans', sans-serif !important;
+    font-size: 12px !important;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.1) !important;
+    border-radius: 6px !important;
+    padding: 8px 10px !important;
+  }
+  .leaflet-tooltip::before { display: none !important; }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <span class="dot-live"></span>
+  <h1>Location Tracker</h1>
+  <button class="tbtn green" onclick="startAddManual()">+ Přidat bod</button>
+  <button class="tbtn" id="btn-list" onclick="toggleList()">Seznam míst</button>
+
+  <div class="io-group">
+    <button class="tbtn" onclick="exportData()" title="Stáhnout zálohu jako JSON">⬇ Export</button>
+    <label class="tbtn" title="Načíst zálohu ze souboru JSON">⬆ Import<input type="file" id="import-file" accept=".json" style="display:none" onchange="importData(event)"></label>
+  </div>
+
+  <span id="stats">0 míst</span>
+</div>
+
+<div id="map"></div>
+<div id="hint">Klikni na mapu pro přidání místa</div>
+<div id="toast">Uloženo</div>
+
+<!-- ADD / EDIT PANEL -->
+<div id="panel">
+  <button class="btn-close" onclick="closePanel()">✕</button>
+  <p class="panel-title" id="panel-title">Nové místo</p>
+  <hr class="divider">
+
+  <div id="mode-section">
+    <div class="mode-tabs" style="margin-bottom:10px;">
+      <div class="mode-tab active" id="tab-map" onclick="setMode('map')">Klikem na mapu</div>
+      <div class="mode-tab" id="tab-addr" onclick="setMode('addr')">Zadáním adresy</div>
+    </div>
+  </div>
+
+  <div id="addr-section" style="display:none; flex-direction:column; gap:8px;">
+    <div class="field">
+      <label>Adresa nebo místo</label>
+      <input id="f-search" type="text" placeholder="např. Zion National Park, Utah">
+    </div>
+    <button class="btn-search" onclick="searchAddress()">Hledat adresu</button>
+    <div id="search-results"></div>
+  </div>
+
+  <div id="coords-display" style="display:none;">
+    <div class="info-row">
+      <div class="info-chip"><div class="chip-label">Lat</div><div class="chip-val" id="disp-lat">—</div></div>
+      <div class="info-chip"><div class="chip-label">Lng</div><div class="chip-val" id="disp-lng">—</div></div>
+    </div>
+  </div>
+
+  <div class="info-row">
+    <div class="info-chip"><div class="chip-label">Datum a čas</div><div class="chip-val" id="disp-dt">—</div></div>
+    <div class="info-chip"><div class="chip-label">Teplota</div><div class="chip-val" id="disp-temp"><span class="temp-loading">—</span></div></div>
+  </div>
+
+  <div class="field">
+    <label>Adresa (zobrazená)</label>
+    <input id="f-addr" type="text" placeholder="doplní se automaticky">
+  </div>
+
+  <div class="field">
+    <label>Poznámka (volitelné)</label>
+    <textarea id="f-note" placeholder="Popis místa, co jsem viděl…"></textarea>
+  </div>
+
+  <div class="visit-toggle" id="visit-toggle" onclick="toggleVisit()">
+    <div class="visit-dot" id="visit-dot"></div>
+    <span class="visit-label" id="visit-label">Chci navštívit</span>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn-save" id="btn-save" onclick="savePoint()" style="display:none">Uložit místo</button>
+    <button class="btn-del" id="btn-del" onclick="deletePoint()" style="display:none">Smazat</button>
+  </div>
+</div>
+
+<!-- LIST PANEL -->
+<div id="list-panel">
+  <button class="list-close" onclick="toggleList()">✕</button>
+  <p class="list-title">Navštívená místa</p>
+  <hr class="divider">
+  <div id="list-items"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet-src.min.js"></script>
+<script>
+const STORAGE_KEY = 'tracker-v1';
+let points = [];
+let map, markersLayer;
+let adding = false;
+let editingId = null;
+let pendingLatLng = null;
+let pendingTemp = null;
+let pendingDatetime = null;
+let currentMode = 'map';
+let listOpen = false;
+let visitOn = false;
+
+// --- Storage ---
+function loadPoints() {
+  try { const r = localStorage.getItem(STORAGE_KEY); if (r) points = JSON.parse(r); } catch(e) { points = []; }
+}
+function savePoints() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(points)); } catch(e) {}
+}
+function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2); }
+
+// --- Export ---
+function exportData() {
+  const json = JSON.stringify(points, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const date = new Date().toISOString().slice(0,10);
+  a.href = url;
+  a.download = `tracker-zaloha-${date}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast('Data exportována');
+}
+
+// --- Import ---
+function importData(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const imported = JSON.parse(e.target.result);
+      if (!Array.isArray(imported)) { alert('Neplatný soubor.'); return; }
+      const existing = points.map(p => p.id);
+      let added = 0;
+      imported.forEach(p => {
+        if (p.id && p.lat && p.lng) {
+          if (!existing.includes(p.id)) { points.push(p); added++; }
+        }
+      });
+      savePoints();
+      renderMarkers();
+      showToast(`Importováno ${added} nových míst`);
+    } catch(err) {
+      alert('Chyba při čtení souboru. Zkontroluj formát JSON.');
+    }
+    event.target.value = '';
+  };
+  reader.readAsText(file);
+}
+
+// --- Toast ---
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+// --- Map ---
+function initMap() {
+  map = L.map('map', { zoomControl: true }).setView([50.073, 14.437], 6);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    attribution: '© OpenStreetMap © CARTO',
+    maxZoom: 19
+  }).addTo(map);
+  markersLayer = L.layerGroup().addTo(map);
+  map.on('click', onMapClick);
+}
+
+function makeIcon(wantVisit) {
+  const fill = wantVisit ? '#E24B4A' : '#1D9E75';
+  const stroke = wantVisit ? '#791F1F' : '#085041';
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="32" viewBox="0 0 24 32">
+    <path d="M12 0C5.37 0 0 5.37 0 12c0 8 12 20 12 20s12-12 12-20C24 5.37 18.63 0 12 0z" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>
+    <circle cx="12" cy="11" r="4" fill="white"/>
+  </svg>`;
+  return L.divIcon({ html: svg, className: '', iconSize: [24, 32], iconAnchor: [12, 32], popupAnchor: [0, -34] });
+}
+
+function formatDT(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleDateString('cs-CZ') + ' ' + d.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' });
+}
+
+function renderMarkers() {
+  markersLayer.clearLayers();
+  points.forEach(p => {
+    const m = L.marker([p.lat, p.lng], { icon: makeIcon(p.wantVisit) });
+    const tempStr = p.temp !== null && p.temp !== undefined ? `${p.temp} °C` : '—';
+    const addrStr = p.addr || '—';
+    const visitBadge = p.wantVisit ? `<span style="background:#E24B4A;color:#fff;font-size:10px;padding:1px 6px;border-radius:8px;margin-left:5px;">chci navštívit</span>` : '';
+    m.bindTooltip(
+      `<b style="font-size:13px;">${p.name || addrStr}</b>${visitBadge}<br>` +
+      (p.name ? `<span style="color:#888;font-size:11px;">${addrStr}</span><br>` : '') +
+      `<span style="color:#aaa;font-size:11px;font-family:monospace;">${formatDT(p.datetime)} · ${tempStr}</span>`,
+      { direction: 'top', offset: [0, -34] }
+    );
+    m.on('click', (e) => { L.DomEvent.stopPropagation(e); openEdit(p.id); });
+    markersLayer.addLayer(m);
+  });
+  document.getElementById('stats').textContent = `${points.length} míst`;
+  renderList();
+}
+
+// --- Temperature ---
+async function fetchTemp(lat, lng) {
+  try {
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current_weather=true&temperature_unit=celsius`;
+    const r = await fetch(url);
+    const d = await r.json();
+    if (d.current_weather) return Math.round(d.current_weather.temperature);
+  } catch(e) {}
+  return null;
+}
+
+// --- Reverse geocode ---
+async function reverseGeocode(lat, lng) {
+  try {
+    const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`;
+    const r = await fetch(url, { headers: { 'Accept-Language': 'cs,en' } });
+    const d = await r.json();
+    return d.display_name || '';
+  } catch(e) { return ''; }
+}
+
+// --- Forward geocode ---
+async function searchAddress() {
+  const q = document.getElementById('f-search').value.trim();
+  if (!q) return;
+  const btn = document.querySelector('.btn-search');
+  btn.textContent = 'Hledám…'; btn.disabled = true;
+  try {
+    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5`;
+    const r = await fetch(url, { headers: { 'Accept-Language': 'cs,en' } });
+    const results = await r.json();
+    showSearchResults(results);
+  } catch(e) { alert('Chyba při hledání. Zkontroluj připojení.'); }
+  btn.textContent = 'Hledat adresu'; btn.disabled = false;
+}
+
+function showSearchResults(results) {
+  const el = document.getElementById('search-results');
+  el.innerHTML = '';
+  if (!results.length) {
+    el.innerHTML = '<div class="search-result-item" style="color:#bbb;">Nic nenalezeno.</div>';
+    el.classList.add('visible'); return;
+  }
+  results.forEach(res => {
+    const div = document.createElement('div');
+    div.className = 'search-result-item';
+    div.textContent = res.display_name;
+    div.onclick = () => selectSearchResult(res);
+    el.appendChild(div);
+  });
+  el.classList.add('visible');
+}
+
+async function selectSearchResult(res) {
+  document.getElementById('search-results').classList.remove('visible');
+  document.getElementById('f-search').value = '';
+  const lat = parseFloat(res.lat), lng = parseFloat(res.lon);
+  await setPendingLocation(lat, lng, res.display_name);
+  map.setView([lat, lng], 14);
+}
+
+// --- Set pending location ---
+async function setPendingLocation(lat, lng, knownAddr) {
+  pendingLatLng = { lat, lng };
+  pendingDatetime = new Date().toISOString();
+
+  document.getElementById('coords-display').style.display = 'block';
+  document.getElementById('disp-lat').textContent = lat.toFixed(5);
+  document.getElementById('disp-lng').textContent = lng.toFixed(5);
+  document.getElementById('disp-dt').textContent = formatDT(pendingDatetime);
+  document.getElementById('disp-temp').innerHTML = '<span class="temp-loading">načítám…</span>';
+  document.getElementById('btn-save').style.display = 'block';
+
+  if (knownAddr) {
+    document.getElementById('f-addr').value = knownAddr;
+  } else {
+    document.getElementById('f-addr').value = 'načítám…';
+    reverseGeocode(lat, lng).then(addr => { document.getElementById('f-addr').value = addr; });
+  }
+
+  pendingTemp = await fetchTemp(lat, lng);
+  document.getElementById('disp-temp').textContent = pendingTemp !== null ? `${pendingTemp} °C` : '—';
+}
+
+// --- Add ---
+function startAddManual() {
+  if (currentMode === 'addr') setMode('map');
+  adding = true; editingId = null; pendingLatLng = null;
+  resetPanelForm();
+  openPanel('Nové místo');
+  document.getElementById('hint').style.display = 'block';
+  map.getContainer().style.cursor = 'crosshair';
+}
+
+async function onMapClick(e) {
+  if (!adding) return;
+  adding = false;
+  map.getContainer().style.cursor = '';
+  document.getElementById('hint').style.display = 'none';
+  await setPendingLocation(e.latlng.lat, e.latlng.lng, null);
+}
+
+// --- Mode ---
+function setMode(m) {
+  currentMode = m;
+  document.getElementById('tab-map').classList.toggle('active', m === 'map');
+  document.getElementById('tab-addr').classList.toggle('active', m === 'addr');
+  document.getElementById('addr-section').style.display = m === 'addr' ? 'flex' : 'none';
+  if (m === 'map') {
+    adding = true;
+    document.getElementById('hint').style.display = 'block';
+    map.getContainer().style.cursor = 'crosshair';
+  } else {
+    adding = false;
+    document.getElementById('hint').style.display = 'none';
+    map.getContainer().style.cursor = '';
+  }
+}
+
+// --- Panel ---
+function resetPanelForm() {
+  document.getElementById('f-note').value = '';
+  document.getElementById('f-addr').value = '';
+  document.getElementById('f-search').value = '';
+  document.getElementById('search-results').classList.remove('visible');
+  document.getElementById('coords-display').style.display = 'none';
+  document.getElementById('disp-lat').textContent = '—';
+  document.getElementById('disp-lng').textContent = '—';
+  document.getElementById('disp-dt').textContent = '—';
+  document.getElementById('disp-temp').innerHTML = '<span class="temp-loading">—</span>';
+  document.getElementById('btn-save').style.display = 'none';
+  document.getElementById('btn-del').style.display = 'none';
+  document.getElementById('mode-section').style.display = 'block';
+  pendingLatLng = null; pendingTemp = null; pendingDatetime = null;
+  setVisitUI(false);
+}
+
+function openPanel(title) {
+  document.getElementById('panel-title').textContent = title;
+  document.getElementById('panel').classList.add('open');
+  setTimeout(() => map.invalidateSize(), 260);
+}
+
+function closePanel() {
+  document.getElementById('panel').classList.remove('open');
+  editingId = null; adding = false;
+  map.getContainer().style.cursor = '';
+  document.getElementById('hint').style.display = 'none';
+  setTimeout(() => map.invalidateSize(), 260);
+}
+
+function openEdit(id) {
+  const p = points.find(x => x.id === id);
+  if (!p) return;
+  editingId = id;
+  pendingLatLng = { lat: p.lat, lng: p.lng };
+  pendingDatetime = p.datetime;
+  pendingTemp = p.temp;
+  resetPanelForm();
+  document.getElementById('mode-section').style.display = 'none';
+  document.getElementById('coords-display').style.display = 'block';
+  document.getElementById('disp-lat').textContent = p.lat.toFixed(5);
+  document.getElementById('disp-lng').textContent = p.lng.toFixed(5);
+  document.getElementById('disp-dt').textContent = formatDT(p.datetime);
+  document.getElementById('disp-temp').textContent = p.temp !== null && p.temp !== undefined ? `${p.temp} °C` : '—';
+  document.getElementById('f-note').value = p.name || '';
+  document.getElementById('f-addr').value = p.addr || '';
+  document.getElementById('btn-save').style.display = 'block';
+  document.getElementById('btn-del').style.display = 'block';
+  setVisitUI(p.wantVisit || false);
+  openPanel(p.name || p.addr || 'Místo');
+}
+
+function toggleVisit() {
+  setVisitUI(!visitOn);
+}
+
+function setVisitUI(on) {
+  visitOn = on;
+  document.getElementById('visit-toggle').classList.toggle('on', on);
+  document.getElementById('visit-label').textContent = on ? 'Chci navštívit ✓' : 'Chci navštívit';
+}
+
+async function savePoint() {
+  if (!pendingLatLng) { alert('Nejprve vyber místo na mapě nebo zadej adresu.'); return; }
+  const name = document.getElementById('f-note').value.trim();
+  const addr = document.getElementById('f-addr').value.trim();
+  if (editingId) {
+    const p = points.find(x => x.id === editingId);
+    if (p) { p.name = name; p.addr = addr; p.wantVisit = visitOn; }
+  } else {
+    points.push({ id: uid(), lat: pendingLatLng.lat, lng: pendingLatLng.lng, addr, name, datetime: pendingDatetime || new Date().toISOString(), temp: pendingTemp, wantVisit: visitOn });
+  }
+  savePoints(); renderMarkers(); closePanel();
+  showToast('Místo uloženo');
+}
+
+function deletePoint() {
+  if (!editingId) return;
+  if (!confirm('Smazat toto místo?')) return;
+  points = points.filter(x => x.id !== editingId);
+  savePoints(); renderMarkers(); closePanel();
+  showToast('Místo smazáno');
+}
+
+// --- List ---
+function toggleList() {
+  listOpen = !listOpen;
+  document.getElementById('list-panel').classList.toggle('open', listOpen);
+  document.getElementById('btn-list').classList.toggle('active', listOpen);
+  setTimeout(() => map.invalidateSize(), 260);
+}
+
+function renderList() {
+  const el = document.getElementById('list-items');
+  el.innerHTML = '';
+  if (!points.length) {
+    el.innerHTML = '<p style="font-size:13px;color:#bbb;">Zatím žádná místa.</p>'; return;
+  }
+  [...points].reverse().forEach(p => {
+    const div = document.createElement('div');
+    div.className = 'list-item' + (p.wantVisit ? ' want-visit' : '');
+    const tempStr = p.temp !== null && p.temp !== undefined ? ` · ${p.temp} °C` : '';
+    const visitBadge = p.wantVisit ? `<span style="background:#E24B4A;color:#fff;font-size:10px;padding:1px 6px;border-radius:8px;margin-left:6px;">chci navštívit</span>` : '';
+    div.innerHTML = `
+      <div class="list-item-name">${p.name || p.addr || '—'}${visitBadge}</div>
+      <div class="list-item-meta">${formatDT(p.datetime)}${tempStr}</div>
+      <div class="list-item-addr">${p.addr || ''}</div>`;
+    div.onclick = () => { map.setView([p.lat, p.lng], 14); toggleList(); openEdit(p.id); };
+    el.appendChild(div);
+  });
+}
+
+// Enter = search
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && document.activeElement.id === 'f-search') searchAddress();
+});
+
+// --- Init ---
+loadPoints(); initMap(); renderMarkers();
+</script>
+</body>
+</html>
