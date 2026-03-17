@@ -2,19 +2,32 @@
 <html lang="cs">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Location Tracker</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet">
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'DM Sans', sans-serif; height: 100vh; display: flex; flex-direction: column; background: #f7f6f3; color: #1a1a1a; }
+  html, body { height: 100%; }
+  body {
+    font-family: 'DM Sans', sans-serif;
+    min-height: 100vh;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    background: #f7f6f3;
+    color: #1a1a1a;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
 
   #topbar {
-    padding: 10px 16px;
+    position: sticky;
+    top: 0;
+    padding: max(10px, env(safe-area-inset-top, 0px)) 16px 10px;
     display: flex; align-items: center; gap: 10px;
     background: #fff; border-bottom: 1px solid #e4e1d9;
-    flex-wrap: wrap; z-index: 100;
+    flex-wrap: wrap; z-index: 1001;
   }
   #topbar h1 { font-size: 14px; font-weight: 500; color: #1a1a1a; white-space: nowrap; letter-spacing: 0.01em; }
   .dot-live { width: 7px; height: 7px; border-radius: 50%; background: #1D9E75; display: inline-block; margin-right: 2px; animation: pulse 2s infinite; }
@@ -31,12 +44,13 @@
   .tbtn.green { background: #1D9E75; color: #fff; border-color: #1D9E75; }
   .tbtn.green:hover { background: #0F6E56; }
   #stats { font-size: 11px; color: #aaa; margin-left: auto; font-family: 'DM Mono', monospace; white-space: nowrap; }
+  #sync-status { font-size: 11px; color: #888; font-family: 'DM Mono', monospace; white-space: nowrap; }
 
   /* export/import group */
   .io-group { display: flex; gap: 6px; align-items: center; margin-left: 4px; padding-left: 10px; border-left: 1px solid #e4e1d9; }
   .io-group label.tbtn { cursor: pointer; }
 
-  #map { flex: 1; }
+  #map { flex: 1; min-height: 0; }
 
   #hint {
     position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
@@ -196,6 +210,13 @@
     padding: 8px 10px !important;
   }
   .leaflet-tooltip::before { display: none !important; }
+
+  @media (max-width: 768px) {
+    #topbar { gap: 8px; align-items: flex-start; }
+    #stats, #sync-status { margin-left: 0; width: 100%; }
+    .io-group { margin-left: 0; padding-left: 0; border-left: 0; width: 100%; flex-wrap: wrap; }
+    .tbtn { min-height: 36px; }
+  }
 </style>
 </head>
 <body>
@@ -282,7 +303,7 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet-src.min.js"></script>
-<script>
+<script type="module">
 const STORAGE_KEY = 'tracker-v1';
 let points = [];
 let map, markersLayer;
@@ -294,14 +315,130 @@ let pendingDatetime = null;
 let currentMode = 'map';
 let listOpen = false;
 let visitOn = false;
+let firebaseReady = false;
+let db = null;
+let unsubscribeRealtime = null;
+
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getDatabase, ref, get, set, onValue } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyCHgXOSzK9CdtWJ1qBT9NKFacqQVUgJGIU",
+  authDomain: "location-tracker-d6eff.firebaseapp.com",
+  databaseURL: "https://location-tracker-d6eff-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "location-tracker-d6eff",
+  storageBucket: "location-tracker-d6eff.firebasestorage.app",
+  messagingSenderId: "872054892148",
+  appId: "1:872054892148:web:31d9dbca6c23c2c0819321"
+};
+const DB_PATH = 'locationTracker/points';
+
+function setSyncStatus(msg, ok = false) {
+  const el = document.getElementById('sync-status');
+  if (!el) return;
+  el.textContent = `Firebase: ${msg}`;
+  el.style.color = ok ? '#1D9E75' : '#888';
+}
+
+function normalizeImportedPoints(arr) {
+  if (!Array.isArray(arr)) return [];
+  return arr.filter(p => p && typeof p === 'object' && p.id && Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lng))).map(p => ({
+    id: String(p.id),
+    lat: Number(p.lat),
+    lng: Number(p.lng),
+    addr: p.addr || '',
+    name: p.name || '',
+    datetime: p.datetime || new Date().toISOString(),
+    temp: p.temp === null || p.temp === undefined || p.temp === '' ? null : Number(p.temp),
+    wantVisit: !!p.wantVisit
+  }));
+}
+
+async function initFirebase() {
+  try {
+    const app = initializeApp(firebaseConfig);
+    db = getDatabase(app);
+    firebaseReady = true;
+    setSyncStatus('připraveno', true);
+  } catch (e) {
+    console.error('Firebase init failed', e);
+    firebaseReady = false;
+    setSyncStatus('chyba inicializace');
+  }
+}
 
 // --- Storage ---
-function loadPoints() {
-  try { const r = localStorage.getItem(STORAGE_KEY); if (r) points = JSON.parse(r); } catch(e) { points = []; }
+function loadPointsLocal() {
+  try {
+    const r = localStorage.getItem(STORAGE_KEY);
+    if (r) points = normalizeImportedPoints(JSON.parse(r));
+    else points = [];
+  } catch(e) { points = []; }
 }
-function savePoints() {
+
+function savePointsLocal() {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(points)); } catch(e) {}
 }
+
+async function loadPointsRemote() {
+  if (!firebaseReady || !db) return false;
+  try {
+    setSyncStatus('načítám…');
+    const snapshot = await get(ref(db, DB_PATH));
+    if (snapshot.exists()) {
+      points = normalizeImportedPoints(snapshot.val()?.items || []);
+      savePointsLocal();
+      setSyncStatus('načteno', true);
+    } else {
+      setSyncStatus('prázdná DB', true);
+    }
+    return true;
+  } catch (e) {
+    console.error('Firebase load failed', e);
+    setSyncStatus('načtení selhalo');
+    return false;
+  }
+}
+
+async function savePoints() {
+  savePointsLocal();
+  if (!firebaseReady || !db) return false;
+  try {
+    setSyncStatus('ukládám…');
+    await set(ref(db, DB_PATH), {
+      items: points,
+      updatedAt: new Date().toISOString(),
+      count: points.length
+    });
+    setSyncStatus('uloženo', true);
+    return true;
+  } catch(e) {
+    console.error('Firebase save failed', e);
+    setSyncStatus('uložení selhalo');
+    return false;
+  }
+}
+
+function startRealtimeSync() {
+  if (!firebaseReady || !db) return;
+  if (unsubscribeRealtime) unsubscribeRealtime();
+  unsubscribeRealtime = onValue(ref(db, DB_PATH), (snapshot) => {
+    if (!snapshot.exists()) return;
+    const remotePoints = normalizeImportedPoints(snapshot.val()?.items || []);
+    const remoteJson = JSON.stringify(remotePoints);
+    const localJson = JSON.stringify(points);
+    if (remoteJson !== localJson) {
+      points = remotePoints;
+      savePointsLocal();
+      renderMarkers();
+      setSyncStatus('synchronizováno', true);
+    }
+  }, (error) => {
+    console.error('Realtime sync failed', error);
+    setSyncStatus('sync chyba');
+  });
+}
+
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2); }
 
 // --- Export ---
@@ -323,18 +460,16 @@ function importData(event) {
   const file = event.target.files[0];
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = (e) => {
+  reader.onload = async (e) => {
     try {
-      const imported = JSON.parse(e.target.result);
+      const imported = normalizeImportedPoints(JSON.parse(e.target.result));
       if (!Array.isArray(imported)) { alert('Neplatný soubor.'); return; }
-      const existing = points.map(p => p.id);
+      const existing = new Set(points.map(p => p.id));
       let added = 0;
       imported.forEach(p => {
-        if (p.id && p.lat && p.lng) {
-          if (!existing.includes(p.id)) { points.push(p); added++; }
-        }
+        if (!existing.has(p.id)) { points.push(p); added++; }
       });
-      savePoints();
+      await savePoints();
       renderMarkers();
       showToast(`Importováno ${added} nových míst`);
     } catch(err) {
@@ -384,7 +519,7 @@ function renderMarkers() {
   markersLayer.clearLayers();
   points.forEach(p => {
     const m = L.marker([p.lat, p.lng], { icon: makeIcon(p.wantVisit) });
-    const tempStr = p.temp !== null && p.temp !== undefined ? `${p.temp} °C` : '—';
+    const tempStr = p.temp !== null && p.temp !== undefined && !Number.isNaN(p.temp) ? `${p.temp} °C` : '—';
     const addrStr = p.addr || '—';
     const visitBadge = p.wantVisit ? `<span style="background:#E24B4A;color:#fff;font-size:10px;padding:1px 6px;border-radius:8px;margin-left:5px;">chci navštívit</span>` : '';
     m.bindTooltip(
@@ -555,10 +690,10 @@ function openEdit(id) {
   const p = points.find(x => x.id === id);
   if (!p) return;
   editingId = id;
+  resetPanelForm();
   pendingLatLng = { lat: p.lat, lng: p.lng };
   pendingDatetime = p.datetime;
   pendingTemp = p.temp;
-  resetPanelForm();
   document.getElementById('mode-section').style.display = 'none';
   document.getElementById('coords-display').style.display = 'block';
   document.getElementById('disp-lat').textContent = p.lat.toFixed(5);
@@ -593,15 +728,19 @@ async function savePoint() {
   } else {
     points.push({ id: uid(), lat: pendingLatLng.lat, lng: pendingLatLng.lng, addr, name, datetime: pendingDatetime || new Date().toISOString(), temp: pendingTemp, wantVisit: visitOn });
   }
-  savePoints(); renderMarkers(); closePanel();
+  await savePoints();
+  renderMarkers();
+  closePanel();
   showToast('Místo uloženo');
 }
 
-function deletePoint() {
+async function deletePoint() {
   if (!editingId) return;
   if (!confirm('Smazat toto místo?')) return;
   points = points.filter(x => x.id !== editingId);
-  savePoints(); renderMarkers(); closePanel();
+  await savePoints();
+  renderMarkers();
+  closePanel();
   showToast('Místo smazáno');
 }
 
@@ -638,8 +777,31 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && document.activeElement.id === 'f-search') searchAddress();
 });
 
+
+Object.assign(window, {
+  startAddManual,
+  toggleList,
+  exportData,
+  importData,
+  closePanel,
+  setMode,
+  searchAddress,
+  toggleVisit,
+  savePoint,
+  deletePoint
+});
+
 // --- Init ---
-loadPoints(); initMap(); renderMarkers();
+async function initApp() {
+  loadPointsLocal();
+  await initFirebase();
+  await loadPointsRemote();
+  initMap();
+  renderMarkers();
+  startRealtimeSync();
+}
+
+initApp();
 </script>
 </body>
 </html>
