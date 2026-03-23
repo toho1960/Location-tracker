@@ -198,6 +198,17 @@
   .visit-toggle.on .visit-label { color: #A32D2D; font-weight: 500; }
   .list-item.want-visit { border-left: 3px solid #E24B4A; }
 
+  /* Color picker */
+  .color-picker { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .color-swatch {
+    width: 28px; height: 28px; border-radius: 50%;
+    border: 2px solid transparent; cursor: pointer;
+    transition: transform 0.12s, border-color 0.12s;
+    flex-shrink: 0;
+  }
+  .color-swatch:hover { transform: scale(1.15); }
+  .color-swatch.selected { border-color: #1a1a1a; transform: scale(1.15); }
+
   /* Tooltip */
   .leaflet-tooltip {
     background: #fff !important;
@@ -288,6 +299,18 @@
     <span class="visit-label" id="visit-label">Chci navštívit</span>
   </div>
 
+  <div class="field">
+    <label>Barva značky</label>
+    <div class="color-picker" id="color-picker">
+      <div class="color-swatch selected" data-color="green"   style="background:#1D9E75;" title="Zelená"></div>
+      <div class="color-swatch"          data-color="red"     style="background:#E24B4A;" title="Červená"></div>
+      <div class="color-swatch"          data-color="blue"    style="background:#185FA5;" title="Modrá"></div>
+      <div class="color-swatch"          data-color="purple"  style="background:#7F77DD;" title="Fialová"></div>
+      <div class="color-swatch"          data-color="beige"   style="background:#C4A882;" title="Béžová"></div>
+      <div class="color-swatch"          data-color="gray"    style="background:#888780;" title="Šedá"></div>
+    </div>
+  </div>
+
   <div class="btn-row">
     <button class="btn-save" id="btn-save" onclick="savePoint()" style="display:none">Uložit místo</button>
     <button class="btn-del" id="btn-del" onclick="deletePoint()" style="display:none">Smazat</button>
@@ -315,7 +338,17 @@ let pendingDatetime = null;
 let currentMode = 'map';
 let listOpen = false;
 let visitOn = false;
+let markerColor = 'green';
 let firebaseReady = false;
+
+const COLOR_MAP = {
+  green:  { fill: '#1D9E75', stroke: '#085041' },
+  red:    { fill: '#E24B4A', stroke: '#791F1F' },
+  blue:   { fill: '#185FA5', stroke: '#0C447C' },
+  purple: { fill: '#7F77DD', stroke: '#3C3489' },
+  beige:  { fill: '#C4A882', stroke: '#7A6348' },
+  gray:   { fill: '#888780', stroke: '#444441' }
+};
 let db = null;
 let unsubscribeRealtime = null;
 
@@ -350,7 +383,8 @@ function normalizeImportedPoints(arr) {
     name: p.name || '',
     datetime: p.datetime || new Date().toISOString(),
     temp: p.temp === null || p.temp === undefined || p.temp === '' ? null : Number(p.temp),
-    wantVisit: !!p.wantVisit
+    wantVisit: !!p.wantVisit,
+    color: p.color || 'green'
   }));
 }
 
@@ -499,11 +533,10 @@ function initMap() {
   map.on('click', onMapClick);
 }
 
-function makeIcon(wantVisit) {
-  const fill = wantVisit ? '#E24B4A' : '#1D9E75';
-  const stroke = wantVisit ? '#791F1F' : '#085041';
+function makeIcon(color) {
+  const c = COLOR_MAP[color] || COLOR_MAP.green;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="32" viewBox="0 0 24 32">
-    <path d="M12 0C5.37 0 0 5.37 0 12c0 8 12 20 12 20s12-12 12-20C24 5.37 18.63 0 12 0z" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>
+    <path d="M12 0C5.37 0 0 5.37 0 12c0 8 12 20 12 20s12-12 12-20C24 5.37 18.63 0 12 0z" fill="${c.fill}" stroke="${c.stroke}" stroke-width="1.5"/>
     <circle cx="12" cy="11" r="4" fill="white"/>
   </svg>`;
   return L.divIcon({ html: svg, className: '', iconSize: [24, 32], iconAnchor: [12, 32], popupAnchor: [0, -34] });
@@ -518,7 +551,7 @@ function formatDT(iso) {
 function renderMarkers() {
   markersLayer.clearLayers();
   points.forEach(p => {
-    const m = L.marker([p.lat, p.lng], { icon: makeIcon(p.wantVisit) });
+    const m = L.marker([p.lat, p.lng], { icon: makeIcon(p.color || (p.wantVisit ? 'red' : 'green')) });
     const tempStr = p.temp !== null && p.temp !== undefined && !Number.isNaN(p.temp) ? `${p.temp} °C` : '—';
     const addrStr = p.addr || '—';
     const visitBadge = p.wantVisit ? `<span style="background:#E24B4A;color:#fff;font-size:10px;padding:1px 6px;border-radius:8px;margin-left:5px;">chci navštívit</span>` : '';
@@ -670,6 +703,7 @@ function resetPanelForm() {
   document.getElementById('mode-section').style.display = 'block';
   pendingLatLng = null; pendingTemp = null; pendingDatetime = null;
   setVisitUI(false);
+  setColorUI('green');
 }
 
 function openPanel(title) {
@@ -705,6 +739,7 @@ function openEdit(id) {
   document.getElementById('btn-save').style.display = 'block';
   document.getElementById('btn-del').style.display = 'block';
   setVisitUI(p.wantVisit || false);
+  setColorUI(p.color || (p.wantVisit ? 'red' : 'green'));
   openPanel(p.name || p.addr || 'Místo');
 }
 
@@ -718,15 +753,28 @@ function setVisitUI(on) {
   document.getElementById('visit-label').textContent = on ? 'Chci navštívit ✓' : 'Chci navštívit';
 }
 
+function setColorUI(color) {
+  markerColor = color;
+  document.querySelectorAll('.color-swatch').forEach(sw => {
+    sw.classList.toggle('selected', sw.dataset.color === color);
+  });
+}
+
+// Wire up color swatches
+document.getElementById('color-picker').addEventListener('click', e => {
+  const sw = e.target.closest('.color-swatch');
+  if (sw) setColorUI(sw.dataset.color);
+});
+
 async function savePoint() {
   if (!pendingLatLng) { alert('Nejprve vyber místo na mapě nebo zadej adresu.'); return; }
   const name = document.getElementById('f-note').value.trim();
   const addr = document.getElementById('f-addr').value.trim();
   if (editingId) {
     const p = points.find(x => x.id === editingId);
-    if (p) { p.name = name; p.addr = addr; p.wantVisit = visitOn; }
+    if (p) { p.name = name; p.addr = addr; p.wantVisit = visitOn; p.color = markerColor; }
   } else {
-    points.push({ id: uid(), lat: pendingLatLng.lat, lng: pendingLatLng.lng, addr, name, datetime: pendingDatetime || new Date().toISOString(), temp: pendingTemp, wantVisit: visitOn });
+    points.push({ id: uid(), lat: pendingLatLng.lat, lng: pendingLatLng.lng, addr, name, datetime: pendingDatetime || new Date().toISOString(), temp: pendingTemp, wantVisit: visitOn, color: markerColor });
   }
   await savePoints();
   renderMarkers();
@@ -787,6 +835,7 @@ Object.assign(window, {
   setMode,
   searchAddress,
   toggleVisit,
+  setColorUI,
   savePoint,
   deletePoint
 });
